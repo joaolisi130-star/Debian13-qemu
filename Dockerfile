@@ -1,37 +1,62 @@
-FROM ubuntu:22.04
-
-ENV DEBIAN_FRONTEND=noninteractive
+FROM debian:bookworm
 
 RUN apt update && apt install -y \
-    curl wget aria2 \
-    qemu-system-x86 qemu-utils \
-    iproute2 iputils-ping \
-    bash sudo \
+    qemu-system-x86 \
+    qemu-utils \
+    aria2 \
+    curl \
+    procps \
+    net-tools \
+    iproute2 \
     ca-certificates \
-    git build-essential cmake \
-    libjson-c-dev libwebsockets-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && apt clean
 
-RUN git clone https://github.com/tsl0922/ttyd.git /ttyd && \
-    cd /ttyd && mkdir build && cd build && \
-    cmake .. && make && make install
-
+# Tailscale
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
-WORKDIR /app
+WORKDIR /root
 
-RUN aria2c -x 16 -s 16 -o /app/debian.iso \
-https://debian.c3sl.ufpr.br/debian-cd/current/amd64/iso-cd/debian-13.5.0-amd64-netinst.iso
+# ISO Debian (opcional)
+RUN aria2c -x 16 -s 16 \
+    -o debian.iso \
+    https://debian.c3sl.ufpr.br/debian-cd/current/amd64/iso-cd/debian-13.5.0-amd64-netinst.iso || true
 
-RUN qemu-img create -f qcow2 /app/disk.qcow2 500G
+# DISCO VIRTUAL (500GB SIMULADO)
+RUN qemu-img create -f qcow2 debian.img 500G
 
-EXPOSE 7681
+# start script
+RUN echo '#!/bin/bash\n\
+echo "============================"\n\
+echo " QEMU STARTING "\n\
+echo " RAM: 10GB (10240MB)"\n\
+echo " DISCO: 500GB (qcow2)"\n\
+echo " VNC :1 -> 5901"\n\
+echo "============================"\n\
+\n\
+hostname -i\n\
+\n\
+# Tailscale userspace\n\
+tailscaled --tun=userspace-networking &\n\
+sleep 3\n\
+\n\
+if [ ! -z \"$TAILSCALE_AUTHKEY\" ]; then\n\
+  tailscale up --authkey=$TAILSCALE_AUTHKEY --hostname=debian13-qemu\n\
+  echo "Tailscale IP:"\n\
+  tailscale ip -4\n\
+fi\n\
+\n\
+exec qemu-system-x86_64 \\\n\
+-m 10240 \\\n\
+-smp 4 \\\n\
+-hda debian.img \\\n\
+-cdrom debian.iso \\\n\
+-boot d \\\n\
+-net nic -net user \\\n\
+-vga std \\\n\
+-display vnc=:1' > start.sh
 
-CMD bash -c "tailscaled --tun=userspace-networking & sleep 2; \
-if [ ! -z \"$TAILSCALE_AUTHKEY\" ]; then \
-tailscale up --authkey=$TAILSCALE_AUTHKEY --hostname=railway-qemu --accept-dns=true; \
-fi; \
-qemu-system-x86_64 -m 4096 -smp 2 -cpu qemu64 -accel tcg \
--hda /app/disk.qcow2 -cdrom /app/debian.iso -boot d \
--net nic -net user -vnc :1 -display none & \
-ttyd -p 7681 -W bash"
+RUN chmod +x start.sh
+
+EXPOSE 5901
+
+CMD ["/root/start.sh"]
