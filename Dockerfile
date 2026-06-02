@@ -1,62 +1,59 @@
-FROM debian:bookworm
+FROM debian:13
 
-RUN apt update && apt install -y \
-    qemu-system-x86 \
-    qemu-utils \
+RUN apt-get update && apt-get install -y \
     aria2 \
     curl \
-    procps \
-    net-tools \
-    iproute2 \
+    wget \
     ca-certificates \
-    && apt clean
+    qemu-system-x86 \
+    qemu-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Tailscale
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 
-WORKDIR /root
+WORKDIR /vm
 
-# ISO Debian (opcional)
-RUN aria2c -x 16 -s 16 \
-    -o debian.iso \
-    https://debian.c3sl.ufpr.br/debian-cd/current/amd64/iso-cd/debian-13.5.0-amd64-netinst.iso || true
+RUN aria2c \
+    -x16 \
+    -s16 \
+    -k1M \
+    -o debian.qcow2 \
+    https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
 
-# DISCO VIRTUAL (500GB SIMULADO)
-RUN qemu-img create -f qcow2 debian.img 500G
+RUN qemu-img resize debian.qcow2 500G
 
-# start script
-RUN echo '#!/bin/bash\n\
-echo "============================"\n\
-echo " QEMU STARTING "\n\
-echo " RAM: 10GB (10240MB)"\n\
-echo " DISCO: 500GB (qcow2)"\n\
-echo " VNC :1 -> 5901"\n\
-echo "============================"\n\
-\n\
-hostname -i\n\
-\n\
-# Tailscale userspace\n\
-tailscaled --tun=userspace-networking &\n\
-sleep 3\n\
-\n\
-if [ ! -z \"$TAILSCALE_AUTHKEY\" ]; then\n\
-  tailscale up --authkey=$TAILSCALE_AUTHKEY --hostname=debian13-qemu\n\
-  echo "Tailscale IP:"\n\
-  tailscale ip -4\n\
-fi\n\
-\n\
-exec qemu-system-x86_64 \\\n\
--m 10240 \\\n\
--smp 4 \\\n\
--hda debian.img \\\n\
--cdrom debian.iso \\\n\
--boot d \\\n\
--net nic -net user \\\n\
--vga std \\\n\
--display vnc=:1' > start.sh
+RUN cat > /start.sh << 'EOF'
+#!/bin/bash
 
-RUN chmod +x start.sh
+echo "================================="
+echo "TAILSCALE USERSPACE"
+echo "================================="
+
+tailscaled --tun=userspace-networking --state=/tmp/tailscaled.state &
+sleep 5
+
+echo ""
+echo "Para conectar o Tailscale execute:"
+echo "tailscale up --auth-key=tskey-auth-kiEZRbZcV411CNTRL-49TNCWqmeZGXTzvAqhbBaGnmB39AsJm6"
+echo ""
+
+echo "================================="
+echo "QEMU INICIADO"
+echo "VM: Debian 13"
+echo "RAM: 8 GB"
+echo "CPU: 4 vCPUs"
+echo "VNC PORTA: 5901"
+echo "================================="
+
+exec qemu-system-x86_64 \
+  -m 8192 \
+  -smp 4 \
+  -drive file=/vm/debian.qcow2,format=qcow2 \
+  -vnc :1
+EOF
+
+RUN chmod +x /start.sh
 
 EXPOSE 5901
 
-CMD ["/root/start.sh"]
+CMD ["/start.sh"]
